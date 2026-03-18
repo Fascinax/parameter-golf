@@ -30,9 +30,9 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 # -----------------------------
 # HYPERPARAMETERS
 # -----------------------------
-# Default Simple Baseline run:
-# - 9 transformer blocks at width 512
-# - 8 attention heads with 4 KV heads (GQA) and 2x MLP expansion
+# Improved run with depth recurrence:
+# - 5 unique transformer blocks looped 3x = 15 effective layers at width 640
+# - 10 attention heads with 5 KV heads (GQA) and 2x MLP expansion
 # - vocab size 1024, sequence length 1024, tied embeddings
 # - 524,288 train tokens per step for 20,000 iterations with a ~10 minute cap
 
@@ -61,10 +61,11 @@ class Hyperparameters:
 
     # Model shape.
     vocab_size = int(os.environ.get("VOCAB_SIZE", 1024))
-    num_layers = int(os.environ.get("NUM_LAYERS", 9))
-    num_kv_heads = int(os.environ.get("NUM_KV_HEADS", 4))
-    model_dim = int(os.environ.get("MODEL_DIM", 512))
-    num_heads = int(os.environ.get("NUM_HEADS", 8))
+    num_layers = int(os.environ.get("NUM_LAYERS", 5))
+    num_recurrence_loops = int(os.environ.get("NUM_RECURRENCE_LOOPS", 3))
+    num_kv_heads = int(os.environ.get("NUM_KV_HEADS", 5))
+    model_dim = int(os.environ.get("MODEL_DIM", 640))
+    num_heads = int(os.environ.get("NUM_HEADS", 10))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
     tie_embeddings = bool(int(os.environ.get("TIE_EMBEDDINGS", "1")))
     rope_base = float(os.environ.get("ROPE_BASE", 10000.0))
@@ -650,6 +651,7 @@ class GPT(nn.Module):
         self,
         vocab_size: int,
         num_layers: int,
+        num_recurrence_loops: int,
         model_dim: int,
         num_heads: int,
         num_kv_heads: int,
@@ -666,11 +668,15 @@ class GPT(nn.Module):
         self.tie_embeddings = tie_embeddings
         self.tied_embed_init_std = tied_embed_init_std
         self.logit_softcap = logit_softcap
+        self.num_recurrence_loops = num_recurrence_loops
         self.tok_emb = nn.Embedding(vocab_size, model_dim)
-        self.num_encoder_layers = num_layers // 2
-        self.num_decoder_layers = num_layers - self.num_encoder_layers
+        # Effective depth = num_layers * num_recurrence_loops
+        effective_layers = num_layers * num_recurrence_loops
+        self.num_encoder_layers = effective_layers // 2
+        self.num_decoder_layers = effective_layers - self.num_encoder_layers
         self.num_skip_weights = min(self.num_encoder_layers, self.num_decoder_layers)
         self.skip_weights = nn.Parameter(torch.ones(self.num_skip_weights, model_dim, dtype=torch.float32))
+        # Only allocate num_layers unique blocks — they get reused across loops
         self.blocks = nn.ModuleList(
             [
                 Block(
@@ -684,6 +690,7 @@ class GPT(nn.Module):
                 for i in range(num_layers)
             ]
         )
+        self.num_unique_layers = num_layers
         self.final_norm = RMSNorm()
         self.lm_head = None if tie_embeddings else CastedLinear(model_dim, vocab_size, bias=False)
         if self.lm_head is not None:
@@ -697,20 +704,24 @@ class GPT(nn.Module):
             if isinstance(module, nn.Linear) and getattr(module, "_zero_init", False):
                 nn.init.zeros_(module.weight)
 
+    def _get_block(self, effective_idx: int) -> Block:
+        return self.blocks[effective_idx % self.num_unique_layers]
+
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
         x = self.tok_emb(input_ids)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
         skips: list[Tensor] = []
 
-        # First half stores skips; second half reuses them in reverse order.
+        # First half (encoder) stores skips; second half (decoder) reuses them.
+        # Blocks are indexed modulo num_unique_layers for weight sharing.
         for i in range(self.num_encoder_layers):
-            x = self.blocks[i](x, x0)
+            x = self._get_block(i)(x, x0)
             skips.append(x)
         for i in range(self.num_decoder_layers):
             if skips:
                 x = x + self.skip_weights[i].to(dtype=x.dtype)[None, None, :] * skips.pop()
-            x = self.blocks[self.num_encoder_layers + i](x, x0)
+            x = self._get_block(self.num_encoder_layers + i)(x, x0)
 
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
@@ -826,6 +837,7 @@ def main() -> None:
     base_model = GPT(
         vocab_size=args.vocab_size,
         num_layers=args.num_layers,
+        num_recurrence_loops=args.num_recurrence_loops,
         model_dim=args.model_dim,
         num_heads=args.num_heads,
         num_kv_heads=args.num_kv_heads,
