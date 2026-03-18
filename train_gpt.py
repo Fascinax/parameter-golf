@@ -87,6 +87,9 @@ class Hyperparameters:
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
 
+    # QAT: fraction of training after which fake quantization is applied
+    qat_start_frac = float(os.environ.get("QAT_START_FRAC", 0.5))
+
 # -----------------------------
 # MUON OPTIMIZER 
 # -----------------------------
@@ -498,6 +501,30 @@ class DistributedTokenLoader:
 # TRANSFORMER MODULES
 # -----------------------------
 
+# Global QAT flag toggled by the training loop
+_QAT_ENABLED = False
+
+def fake_quantize_int8(w: Tensor) -> Tensor:
+    """Straight-Through Estimator fake quantization matching the int8 exporter."""
+    if not _QAT_ENABLED or w.numel() <= INT8_KEEP_FLOAT_MAX_NUMEL:
+        return w
+    w32 = w.float()
+    if w32.ndim == 2:
+        clip_abs = torch.quantile(w32.abs(), INT8_CLIP_Q, dim=1)
+        clip_abs = clip_abs.clamp_min(1e-8)
+        scale = clip_abs / 127.0
+        q = torch.clamp(torch.round(w32 / scale[:, None]), -127, 127)
+        w_fq = (q * scale[:, None]).to(w.dtype)
+    else:
+        clip_abs = float(torch.quantile(w32.abs().flatten(), INT8_CLIP_Q).item())
+        clip_abs = max(clip_abs, 1e-8)
+        scale = clip_abs / 127.0
+        q = torch.clamp(torch.round(torch.clamp(w32, -clip_abs, clip_abs) / scale), -127, 127)
+        w_fq = (q * scale).to(w.dtype)
+    # STE: forward uses quantized, backward uses original
+    return w + (w_fq - w).detach()
+
+
 class RMSNorm(nn.Module):
     def __init__(self, eps: float | None = None):
         super().__init__()
@@ -510,8 +537,11 @@ class RMSNorm(nn.Module):
 class CastedLinear(nn.Linear):
     # Keep weights in fp32 for optimizer/state quality, cast at matmul time for bf16 compute.
     def forward(self, x: Tensor) -> Tensor:
+        w = self.weight
+        if _QAT_ENABLED and w.numel() > INT8_KEEP_FLOAT_MAX_NUMEL:
+            w = fake_quantize_int8(w)
         bias = self.bias.to(x.dtype) if self.bias is not None else None
-        return F.linear(x, self.weight.to(x.dtype), bias)
+        return F.linear(x, w.to(x.dtype), bias)
 
 
 def restore_low_dim_params_to_fp32(module: nn.Module) -> None:
@@ -708,7 +738,11 @@ class GPT(nn.Module):
         return self.blocks[effective_idx % self.num_unique_layers]
 
     def forward(self, input_ids: Tensor, target_ids: Tensor) -> Tensor:
-        x = self.tok_emb(input_ids)
+        # QAT: fake-quantize tied embedding weight (used for both input and logits)
+        emb_weight = self.tok_emb.weight
+        if _QAT_ENABLED and self.tie_embeddings and emb_weight.numel() > INT8_KEEP_FLOAT_MAX_NUMEL:
+            emb_weight = fake_quantize_int8(emb_weight)
+        x = F.embedding(input_ids, emb_weight)
         x = F.rms_norm(x, (x.size(-1),))
         x0 = x
         skips: list[Tensor] = []
@@ -726,7 +760,7 @@ class GPT(nn.Module):
         x = self.final_norm(x).reshape(-1, x.size(-1))
         targets = target_ids.reshape(-1)
         if self.tie_embeddings:
-            logits_proj = F.linear(x, self.tok_emb.weight)
+            logits_proj = F.linear(x, emb_weight.to(x.dtype))
         else:
             if self.lm_head is None:
                 raise RuntimeError("lm_head is required when tie_embeddings=False")
@@ -1017,6 +1051,10 @@ def main() -> None:
             break
 
         elapsed_ms = training_time_ms + 1000.0 * (time.perf_counter() - t0)
+        # Enable QAT after qat_start_frac of training
+        global _QAT_ENABLED
+        training_frac = step / max(args.iterations, 1)
+        _QAT_ENABLED = training_frac >= args.qat_start_frac
         scale = lr_mul(step, elapsed_ms)
         zero_grad_all()
         train_loss = torch.zeros((), device=device)
