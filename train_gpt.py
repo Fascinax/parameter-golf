@@ -63,7 +63,7 @@ class Hyperparameters:
     vocab_size = int(os.environ.get("VOCAB_SIZE", 1024))
     num_layers = int(os.environ.get("NUM_LAYERS", 5))
     num_recurrence_loops = int(os.environ.get("NUM_RECURRENCE_LOOPS", 3))
-    num_kv_heads = int(os.environ.get("NUM_KV_HEADS", 9))
+    num_kv_heads = int(os.environ.get("NUM_KV_HEADS", 6))
     model_dim = int(os.environ.get("MODEL_DIM", 1152))
     num_heads = int(os.environ.get("NUM_HEADS", 18))
     mlp_mult = int(os.environ.get("MLP_MULT", 2))
@@ -76,8 +76,8 @@ class Hyperparameters:
     head_lr = float(os.environ.get("HEAD_LR", 0.008))
     tied_embed_lr = float(os.environ.get("TIED_EMBED_LR", 0.05))
     tied_embed_init_std = float(os.environ.get("TIED_EMBED_INIT_STD", 0.005))
-    matrix_lr = float(os.environ.get("MATRIX_LR", 0.04))
-    scalar_lr = float(os.environ.get("SCALAR_LR", 0.04))
+    matrix_lr = float(os.environ.get("MATRIX_LR", 0.05))
+    scalar_lr = float(os.environ.get("SCALAR_LR", 0.05))
     muon_momentum = float(os.environ.get("MUON_MOMENTUM", 0.95))
     muon_backend_steps = int(os.environ.get("MUON_BACKEND_STEPS", 5))
     muon_momentum_warmup_start = float(os.environ.get("MUON_MOMENTUM_WARMUP_START", 0.85))
@@ -86,7 +86,7 @@ class Hyperparameters:
     beta2 = float(os.environ.get("BETA2", 0.95))
     adam_eps = float(os.environ.get("ADAM_EPS", 1e-8))
     grad_clip_norm = float(os.environ.get("GRAD_CLIP_NORM", 0.0))
-    qat_start_frac = float(os.environ.get("QAT_START_FRAC", 0.5))
+    qat_start_frac = float(os.environ.get("QAT_START_FRAC", 0.7))
 
 # -----------------------------
 # MUON OPTIMIZER 

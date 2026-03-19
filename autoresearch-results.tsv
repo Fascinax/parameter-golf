@@ -1,0 +1,8 @@
+iteration	commit	metric	delta	guard	status	description
+0	0c0ea98	1.2244	0.0	-	baseline	Original baseline: 9 layers, 512 dim, vocab 1024, tied embeddings
+1	2cb062b	2.1307	-0.0343	local-200iter	keep	Depth recurrence (5x3=15 eff layers, dim 640) + QAT (qat_start_frac=0.5)
+-	-	2.1236	+0.0126_vs_DR	local-200iter	discard	SwiGLU: worse pre-quant BPB than relu^2 with depth recurrence
+2	b65daa6	2.1149	-0.0501	local-200iter	keep	Wider model dim=768, 12 heads, 6 KV
+3	c21d2d7	2.1007	-0.0643	local-200iter	keep	Wider model dim=896, 14 heads, 7 KV
+4	f7a1654	2.0951	-0.0699	local-200iter	keep	Wider model dim=1024, 16 heads, 8 KV
+5	55f3aef	2.0754	-0.0896	local-200iter	keep	Max budget dim=1152, 18 heads, 9 KV (15.27MB/16MB)
