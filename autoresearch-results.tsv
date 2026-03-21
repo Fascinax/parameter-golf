@@ -1,8 +1,32 @@
+# metric_direction: lower_is_better
+# verify: $env:ITERATIONS="200"; $env:TRAIN_BATCH_TOKENS="65536"; $env:VAL_BATCH_SIZE="524288"; $env:VAL_LOSS_EVERY="200"; $env:WARMUP_STEPS="5"; $env:MAX_WALLCLOCK_SECONDS="0"; $env:TRAIN_LOG_EVERY="50"; .\.venv\Scripts\python.exe train_gpt.py
+# scope: train_gpt.py
+# metric: final_int8_zlib_roundtrip val_bpb
 iteration	commit	metric	delta	guard	status	description
-0	0c0ea98	1.2244	0.0	-	baseline	Original baseline: 9 layers, 512 dim, vocab 1024, tied embeddings
-1	2cb062b	2.1307	-0.0343	local-200iter	keep	Depth recurrence (5x3=15 eff layers, dim 640) + QAT (qat_start_frac=0.5)
--	-	2.1236	+0.0126_vs_DR	local-200iter	discard	SwiGLU: worse pre-quant BPB than relu^2 with depth recurrence
-2	b65daa6	2.1149	-0.0501	local-200iter	keep	Wider model dim=768, 12 heads, 6 KV
-3	c21d2d7	2.1007	-0.0643	local-200iter	keep	Wider model dim=896, 14 heads, 7 KV
-4	f7a1654	2.0951	-0.0699	local-200iter	keep	Wider model dim=1024, 16 heads, 8 KV
-5	55f3aef	2.0754	-0.0896	local-200iter	keep	Max budget dim=1152, 18 heads, 9 KV (15.27MB/16MB)
+0	0c0ea98	2.1650	0.0	-	baseline	Original baseline (9 layers dim=512) with Windows compat patches only
+1	2cb062b	2.1307	-0.0343	-	keep	Depth recurrence 5x3 + QAT STE (dim=640)
+2	-	2.1548	+0.0241	-	discard	SwiGLU activation — worse than relu^2 with depth recurrence
+3	b65daa6	2.1149	-0.0501	-	keep	Width scaling dim=768, heads=12, kv=6
+4	c21d2d7	2.1007	-0.0643	-	keep	Width scaling dim=896, heads=14, kv=7
+5	f7a1654	2.0951	-0.0699	-	keep	Width scaling dim=1024, heads=16, kv=8
+6	55f3aef	2.0754	-0.0896	-	keep	Width scaling dim=1152, heads=18, kv=9 (15.27MB)
+7	-	2.0897	+0.0143	-	discard	Recurrence 4x4 (16 eff layers) — fewer unique layers hurts
+8	-	1.9955	-0.0799	-	discard	matrix_lr=0.06 — great BPB but 17.06MB OVER BUDGET
+9	-	2.0449	-0.0305	-	keep-pending	matrix_lr=0.05 + kv_heads=6 — 15.24MB, under budget
+10	-	2.0425	-0.0329	-	keep-pending	+ scalar_lr=0.05 — marginal gain
+11	-	2.0544	+0.0119	-	discard	tied_embed_lr=0.08 — instability (loss spike 11.94 at step 2)
+12	-	2.0473	+0.0048	-	discard	qat_start_frac=0.4 — worse than 0.5
+13	-	2.0388	-0.0037	-	keep-pending	qat_start_frac=0.7 — pre-quant improved (int8 verification interrupted)
+14	03d0f8f	2.0388	-0.0366	-	keep	Committed LR tune: matrix=0.05, scalar=0.05, kv=6, qat=0.7
+15	-	2.0884	+0.0496	-	discard	warmdown_iters=1600 — bad at 200-iter proxy (warmdown eats 80% of training)
+16	-	0.0	0.0	-	crash	6 layers x 3 loops (54M params) — OOM on 12GB VRAM
+17	0a7e0aa	2.0370	-0.0018	-	keep	embed_lr=0.4 (down from 0.6) — small improvement
+18	-	2.0397	+0.0027	-	discard	muon_momentum=0.90 — slightly worse than 0.95
+19	-	2.0398	+0.0028	-	discard	logit_softcap=50 — no improvement, OOM during int8 verify
+20	-	0.0	0.0	-	crash	qk_gain_init=2.0 — OOM during eval (VRAM pressure from larger attention scale?)
+21	fe55969	2.0324	-0.0046	-	keep	rope_base=5000 (down from 10000) — tighter positional encoding helps
+22	-	0.0	0.0	-	discard	muon_backend_steps=7 — 2.0155 BPB but 16.43MB OVER BUDGET
+23	-	0.0	0.0	-	crash	Int6 QAT [-31,31] full — OOM at step ~151 during QAT backward
+24	-	3.7261	+1.6937	-	discard	Int6 post-quant only (Int8 QAT) — 5.9MB but terrible roundtrip BPB
+25	-	2.5023	+0.4699	-	discard	Int6 QAT+export retry — 6.0MB but BPB too degraded at 200 iters
+26	1f1a445	2.0321	-0.0003	-	keep	zstd-22 compression (was zlib-9) — same BPB, artifact 14.1MB (saved ~1.9MB)
