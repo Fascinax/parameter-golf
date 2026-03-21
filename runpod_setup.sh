@@ -6,8 +6,12 @@
 #   bash runpod_setup.sh
 #
 # Prerequisites: RunPod PyTorch template (e.g. runpod/pytorch:2.4.0-py3.11-cuda12.4.1)
-# Recommended: A100 80GB ($1.10/h) or H100 ($3.50/h)
-#              Multi-GPU pod for parallel experiments (e.g. 2xA100, 4xA100)
+# Recommended GPUs (RunPod pricing, March 2026):
+#   - RTX 4090 24GB  = $0.59/hr  (cheapest, sufficient for 200-iter proxy)
+#   - RTX 5090 32GB  = $0.89/hr  (more VRAM headroom)
+#   - A100 SXM 80GB  = $1.49/hr  (fast, big VRAM, good for larger batches)
+#   - H100 SXM 80GB  = $2.69/hr  (fastest, matches eval hardware)
+#   Multi-GPU pod for parallel experiments: 2xA100 ($2.98/hr), 4xRTX4090 ($2.36/hr)
 # =============================================================================
 
 set -euo pipefail
@@ -29,7 +33,7 @@ else
 fi
 
 echo "=== [2/5] Installing Python dependencies ==="
-pip install -q sentencepiece zstandard numpy
+pip install -q sentencepiece zstandard numpy torch --upgrade 2>/dev/null || true
 
 echo "=== [3/5] Downloading dataset ==="
 if [ -d "$WORKDIR/data/datasets/fineweb10B_sp1024" ] && \
