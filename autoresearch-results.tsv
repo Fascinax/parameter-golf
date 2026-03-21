@@ -30,3 +30,4 @@ iteration	commit	metric	delta	guard	status	description
 24	-	3.7261	+1.6937	-	discard	Int6 post-quant only (Int8 QAT) — 5.9MB but terrible roundtrip BPB
 25	-	2.5023	+0.4699	-	discard	Int6 QAT+export retry — 6.0MB but BPB too degraded at 200 iters
 26	1f1a445	2.0321	-0.0003	-	keep	zstd-22 compression (was zlib-9) — same BPB, artifact 14.1MB (saved ~1.9MB)
+27	-	2.0507	+0.0183	15.76MB	discard	orthogonal init for non-zero linear layers — worse BPB and larger artifact (weights compress worse)
